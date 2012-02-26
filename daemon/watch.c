@@ -34,6 +34,7 @@ struct dtr_watchdir
     tr_session * session;
     char * dir;
     dtr_watchdir_callback * callback;
+    void *callbackArgument;
 #ifdef WITH_INOTIFY
     int inotify_fd;
 #else /* readdir implementation */
@@ -90,7 +91,7 @@ watchdir_new_impl( dtr_watchdir * w )
                 continue;
 
             tr_inf( "Found new .torrent file \"%s\" in watchdir \"%s\"", name, w->dir );
-            w->callback( w->session, w->dir, name );
+            w->callback( w->session, w->dir, name, w->callbackArgument );
         }
 
         closedir( odir );
@@ -139,7 +140,7 @@ watchdir_update_impl( dtr_watchdir * w )
             if( tr_str_has_suffix( name, ".torrent" ) )
             {
                 tr_inf( "Found new .torrent file \"%s\" in watchdir \"%s\"", name, w->dir );
-                w->callback( w->session, w->dir, name );
+                w->callback( w->session, w->dir, name, w->callbackArgument );
             }
             i += EVENT_SIZE +  event->len;
         }
@@ -244,13 +245,14 @@ watchdir_update_impl( dtr_watchdir * w )
 ***/
 
 dtr_watchdir*
-dtr_watchdir_new( tr_session * session, const char * dir, dtr_watchdir_callback * callback )
+dtr_watchdir_new( tr_session * session, const char * dir, dtr_watchdir_callback * callback, const void * callbackArgument )
 {
     dtr_watchdir * w = tr_new0( dtr_watchdir, 1 );
 
     w->session = session;
     w->dir = tr_strdup( dir );
     w->callback = callback;
+    w->callbackArgument = tr_strdup(callbackArgument); 
 
     watchdir_new_impl( w );
 
@@ -271,6 +273,7 @@ dtr_watchdir_free( dtr_watchdir * w )
     {
         watchdir_free_impl( w );
         tr_free( w->dir );
+        tr_free( w->callbackArgument );
         tr_free( w );
     }
 }

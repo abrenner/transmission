@@ -14,6 +14,7 @@
 #include <stdio.h> /* printf */
 #include <stdlib.h> /* exit, atoi */
 
+#include <dirent.h> /* dirent, scandir */ 
 #include <fcntl.h> /* open */
 #include <signal.h>
 #ifdef HAVE_SYSLOG
@@ -35,6 +36,7 @@
 
 #define PREF_KEY_DIR_WATCH          "watch-dir"
 #define PREF_KEY_DIR_WATCH_ENABLED  "watch-dir-enabled"
+#define PREF_KEY_DIR_WATCH_SUFFIX_ENABLED "watch-dir-suffix-enabled"
 #define PREF_KEY_PIDFILE            "pidfile"
 
 #define MEM_K 1024
@@ -230,10 +232,20 @@ getConfigDir( int argc, const char ** argv )
 }
 
 static void
-onFileAdded( tr_session * session, const char * dir, const char * file )
+onFileAdded( tr_session * session, const char * dir, const char * file, const void *callbackArgument )
 {
     char * filename = tr_buildPath( dir, file, NULL );
     tr_ctor * ctor = tr_ctorNew( session );
+    if(callbackArgument != NULL) 
+    { 
+        const char *downloadDir; 
+        char *newPath; 
+        tr_ctorGetDownloadDir(ctor, TR_FALLBACK, &downloadDir); 
+        newPath = tr_strdup_printf("%s%s", downloadDir, (const char *)callbackArgument); 
+        tr_dbg("Change download dir from %s to %s", downloadDir, newPath); 
+                tr_ctorSetDownloadDir(ctor, TR_FORCE, newPath); 
+                tr_free(newPath); 
+    }
     int err = tr_ctorSetMetainfoFromFile( ctor, filename );
 
     if( !err )
@@ -338,7 +350,8 @@ main( int argc, char ** argv )
     bool dumpSettings = false;
     const char * configDir = NULL;
     const char * pid_filename;
-    dtr_watchdir * watchdir = NULL;
+    dtr_watchdir ** watchdir = NULL;
+    int numberOfWatchdirs = 0;
     FILE * logfile = NULL;
     bool pidfile_created = false;
 
@@ -517,8 +530,47 @@ main( int argc, char ** argv )
             && dir
             && *dir )
         {
+            numberOfWatchdirs++;
+            watchdir = tr_malloc(sizeof(dtr_watchdir*)*numberOfWatchdirs);
             tr_inf( "Watching \"%s\" for new .torrent files", dir );
-            watchdir = dtr_watchdir_new( mySession, dir, onFileAdded );
+            watchdir[0] = dtr_watchdir_new( mySession, dir, onFileAdded, NULL );
+
+            /* checking for _suffix matching of watchdir */ 
+            if(tr_bencDictFindBool( &settings, PREF_KEY_DIR_WATCH_SUFFIX_ENABLED, &boolVal) && boolVal) 
+            { 
+                struct dirent **eps; 
+                int numberOfDirs; 
+                char * dirname = tr_dirname(dir); 
+                char * basename = tr_basename(dir); 
+
+                tr_dbg( "Suffix watching \"%s\" for new .torrent files", dirname ); 
+                numberOfDirs = scandir (dirname, &eps, 0, alphasort); 
+                if(numberOfDirs>=1) 
+                { 
+                    int cnt; 
+                    for (cnt = 0; cnt < numberOfDirs; ++cnt) 
+                    { 
+                        if(strncmp(basename, eps[cnt]->d_name, strlen(basename)) == 0 && strlen(basename) < strlen(eps[cnt]->d_name)) 
+                        { 
+                                char * newDir = tr_buildPath(dirname, eps[cnt]->d_name, NULL); 
+                                dtr_watchdir ** watchdirReallocated; 
+                                tr_dbg("Found directory \"%s\" as suffix directory of \"%s\"", eps[cnt]->d_name, basename); 
+                                numberOfWatchdirs++; 
+                            tr_inf( "Watching \"%s\" for new .torrent files", newDir ); 
+
+                            watchdirReallocated = tr_malloc(sizeof(dtr_watchdir*)*numberOfWatchdirs); 
+                                                        memcpy(watchdirReallocated, watchdir, sizeof(dtr_watchdir*)*(numberOfWatchdirs-1)); 
+                                                        tr_free(watchdir); 
+                                                        watchdir = watchdirReallocated; 
+                                                        watchdir[numberOfWatchdirs-1] = dtr_watchdir_new( mySession, newDir, onFileAdded, eps[cnt]->d_name + strlen(basename)); 
+                            tr_free(newDir); 
+                        } 
+                    } 
+                } 
+
+                tr_free(dirname); 
+                tr_free(basename); 
+           }
         }
     }
 
@@ -540,13 +592,20 @@ main( int argc, char ** argv )
 
     while( !closing ) {
         tr_wait_msec( 1000 ); /* sleep one second */
-        dtr_watchdir_update( watchdir );
+        for(c=0; c<numberOfWatchdirs; c++)
+        {
+                dtr_watchdir_update( watchdir[c] );
+        }
         pumpLogMessages( logfile );
     }
 
     printf( "Closing transmission session..." );
     tr_sessionSaveSettings( mySession, configDir, &settings );
-    dtr_watchdir_free( watchdir );
+    for(c=0; c<numberOfWatchdirs; c++)
+    {
+	        dtr_watchdir_free( watchdir[c] );
+    }
+    tr_free(watchdir);
     tr_sessionClose( mySession );
     pumpLogMessages( logfile );
     printf( " done.\n" );

@@ -15,9 +15,9 @@
 
 typedef struct dtr_watchdir dtr_watchdir;
 
-typedef void( dtr_watchdir_callback )( tr_session * session, const char * dir, const char * file );
+typedef void( dtr_watchdir_callback )( tr_session * session, const char * dir, const char * file, const void *argument );
 
-dtr_watchdir* dtr_watchdir_new( tr_session * session, const char * dir, dtr_watchdir_callback cb );
+dtr_watchdir* dtr_watchdir_new( tr_session * session, const char * dir, dtr_watchdir_callback cb, const void *callbackArgument );
 
 void dtr_watchdir_update( dtr_watchdir * w );
 
